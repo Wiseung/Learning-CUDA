@@ -9,6 +9,11 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
+Default CUDA architectures:
+
+- `sm_75` for T4-compatible builds
+- `sm_89` for newer Ada-class local GPUs
+
 ## Run
 
 ```bash
@@ -24,6 +29,9 @@ Example:
 Program output prints:
 
 - Kernel time (ms)
+- End-to-end time (ms)
+- Graph build time (ms, current call only; zero when graph is already cached)
+- Host input pinned count (`0..4`)
 - Effective bandwidth (GB/s)
 - Speedup vs bitsandbytes (if `bnb_time_ms` is set in params)
 - Selected block dimension (`block_dim`)
@@ -48,11 +56,16 @@ Supported keys in `params.txt`:
 - `autotune_repeats` (default `5`)
 - `kernel_warmup_iters` (default `0`, extra in-process warmup runs without D2H copy)
 - `profile_loop_iters` (default `1`; when `>1`, run N loops in one process and start profiler capture from loop 2, i.e. capture last `N-1`)
+- `use_pinned_host_input` (`true/false`, default `true`)
 - `reuse_device_buffers` (`true/false`, default `true`)
+- `use_cuda_graph` (`true/false`, default `false`; only effective with `reuse_device_buffers=true`)
+- `kernel_variant` (`auto`, `generic`, or `specialized`; default `auto`)
 - `use_pinned_host_output` (`true/false`, default `true`)
 - `perf_log_path` (optional custom log path)
 
 Note: when `autotune_block_dim=true`, candidate runs measure kernel time only (skip D2H copy) and the final selected run still performs full D2H output copy.
+
+`kernel_variant=specialized` currently has dedicated fast paths for `blocksize=64` and `blocksize=128`. When `blocks_per_group=256`, the specialized path also uses a fixed hot path for `group_id` computation. For other block sizes, the executable falls back to `generic` and records both requested/effective variants in the perf log.
 
 Example A/B auto-tune params:
 
@@ -67,7 +80,10 @@ autotune_block_dim = true
 autotune_repeats = 5
 kernel_warmup_iters = 0
 profile_loop_iters = 1
+use_pinned_host_input = true
 reuse_device_buffers = true
+use_cuda_graph = false
+kernel_variant = "auto"
 use_pinned_host_output = true
 ```
 
@@ -102,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File tests/run_nsys_profile.ps1 -WeightsBin 
 When your executable uses `cudaProfilerStart/Stop` (for example `profile_loop_iters > 1`), add:
 
 ```powershell
--UseCudaProfilerRange:$true
+-UseCudaProfilerRange 1
 ```
 
 Compare two exported nsys report stems:
@@ -123,19 +139,51 @@ One-shot compare for `reuse_device_buffers=false` vs `true`:
 powershell -ExecutionPolicy Bypass -File tests/run_nsys_reuse_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate tests/data/params_nsys_pinned.txt -OutputDir tests/data
 ```
 
+One-shot A/B compare for `kernel_variant=generic` vs `specialized`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_kernel_variant_ab.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5
+```
+
+One-shot A/B compare for `use_cuda_graph=false` vs `true`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_cuda_graph_ab.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5
+```
+
+One-shot cold-start A/B compare for `use_pinned_host_input=false` vs `true`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_pinned_input_ab.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5
+```
+
+This writes `tests/data/pinned_input_ab.csv` with median `kernel_time_ms`, `end_to_end_ms`, and `graph_build_time_ms`.
+
+Nsight Systems median compare for `kernel_variant=generic` vs `specialized`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_nsys_kernel_variant_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate tests/data/params_nsys_pinned.txt -OutputDir tests/data -Rounds 5 -ProfileLoopIters 6 -UseCudaProfilerRange 1 -RunTag variant
+```
+
+Nsight Systems median compare for `use_cuda_graph=false` vs `true`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_nsys_cuda_graph_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate tests/data/params_nsys_pinned.txt -OutputDir tests/data -Rounds 5 -ProfileLoopIters 6 -UseCudaProfilerRange 1 -RunTag graph
+```
+
 Default behavior of `run_nsys_reuse_compare.ps1`:
 
 - repeats `5` rounds
 - injects `profile_loop_iters = 6` and `kernel_warmup_iters = 0`
 - each profiled process captures only loops `2..6` (last `N-1`)
-- uses `--capture-range=cudaProfilerApi` via `-UseCudaProfilerRange:$true`
+- uses `--capture-range=cudaProfilerApi` via `-UseCudaProfilerRange 1`
 - prints median comparison across all rounds
 - writes median CSV to `tests/data/nsys_<tag>_median.csv` (default tag: `steady`)
 
 Cold-start median compare (includes first-run allocations/copies):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tests/run_nsys_reuse_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate tests/data/params_nsys_pinned.txt -OutputDir tests/data -Rounds 5 -ProfileLoopIters 1 -UseCudaProfilerRange:$false -RunTag cold
+powershell -ExecutionPolicy Bypass -File tests/run_nsys_reuse_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate tests/data/params_nsys_pinned.txt -OutputDir tests/data -Rounds 5 -ProfileLoopIters 1 -UseCudaProfilerRange 0 -RunTag cold
 ```
 
 Run both steady-state and cold-start reports in one command:

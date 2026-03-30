@@ -113,7 +113,7 @@
     <CudaCompile>
       <Include>G:\Learning-CUDA\NF4_Dequant_CUDA\include;%(Include)</Include>
       <Defines>%(Defines);_WINDOWS;CMAKE_INTDIR="Debug"</Defines>
-      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] -O3 -Xcompiler="/EHsc -Zi -Ob0"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_89,code=[compute_89,sm_89] -O3 -Xcompiler="/EHsc -Zi -Ob0"</AdditionalOptions>
       <CodeGeneration></CodeGeneration>
       <CompileOut>$(IntDir)%(Filename).obj</CompileOut>
       <CudaRuntime>Static</CudaRuntime>
@@ -181,7 +181,7 @@
     <CudaCompile>
       <Include>G:\Learning-CUDA\NF4_Dequant_CUDA\include;%(Include)</Include>
       <Defines>%(Defines);_WINDOWS;NDEBUG;CMAKE_INTDIR="Release"</Defines>
-      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] -O3 -Xcompiler="/EHsc -Ob2"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_89,code=[compute_89,sm_89] -O3 -Xcompiler="/EHsc -Ob2"</AdditionalOptions>
       <CodeGeneration></CodeGeneration>
       <CompileOut>$(IntDir)%(Filename).obj</CompileOut>
       <CudaRuntime>Static</CudaRuntime>
@@ -248,7 +248,7 @@
     <CudaCompile>
       <Include>G:\Learning-CUDA\NF4_Dequant_CUDA\include;%(Include)</Include>
       <Defines>%(Defines);_WINDOWS;NDEBUG;CMAKE_INTDIR="MinSizeRel"</Defines>
-      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] -O3 -Xcompiler="/EHsc -Ob1"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_89,code=[compute_89,sm_89] -O3 -Xcompiler="/EHsc -Ob1"</AdditionalOptions>
       <CodeGeneration></CodeGeneration>
       <CompileOut>$(IntDir)%(Filename).obj</CompileOut>
       <CudaRuntime>Static</CudaRuntime>
@@ -314,7 +314,7 @@
     <CudaCompile>
       <Include>G:\Learning-CUDA\NF4_Dequant_CUDA\include;%(Include)</Include>
       <Defines>%(Defines);_WINDOWS;NDEBUG;CMAKE_INTDIR="RelWithDebInfo"</Defines>
-      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] -O3 -Xcompiler="/EHsc -Zi -Ob1"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_89,code=[compute_89,sm_89] -O3 -Xcompiler="/EHsc -Zi -Ob1"</AdditionalOptions>
       <CodeGeneration></CodeGeneration>
       <CompileOut>$(IntDir)%(Filename).obj</CompileOut>
       <CudaRuntime>Static</CudaRuntime>

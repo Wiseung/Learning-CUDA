@@ -5,11 +5,40 @@ param(
     [string]$ReportStem = "tests/data/nsys_run",
     [string]$ExePath = "build/Release/nf4_dequant.exe",
     [string]$NsysPath = "C:\Program Files\NVIDIA Corporation\Nsight Systems 2024.4.2\target-windows-x64\nsys.exe",
-    [bool]$WarmupFirst = $true,
-    [bool]$UseCudaProfilerRange = $false
+    $WarmupFirst = $true,
+    $UseCudaProfilerRange = $false
 )
 
 $ErrorActionPreference = "Stop"
+
+function Convert-ToBoolValue {
+    param(
+        $Value,
+        [string]$Name
+    )
+
+    if ($Value -is [bool]) {
+        return $Value
+    }
+    if ($Value -is [int] -or $Value -is [long]) {
+        if ($Value -eq 0) { return $false }
+        if ($Value -eq 1) { return $true }
+    }
+
+    $text = "$Value".Trim().ToLowerInvariant()
+    switch ($text) {
+        "true" { return $true }
+        "false" { return $false }
+        "1" { return $true }
+        "0" { return $false }
+        '$true' { return $true }
+        '$false' { return $false }
+    }
+    throw ("Invalid boolean value for {0}: {1}" -f $Name, $Value)
+}
+
+$WarmupFirst = Convert-ToBoolValue -Value $WarmupFirst -Name "WarmupFirst"
+$UseCudaProfilerRange = Convert-ToBoolValue -Value $UseCudaProfilerRange -Name "UseCudaProfilerRange"
 
 if (-not (Test-Path $NsysPath)) {
     throw "nsys.exe not found: $NsysPath"

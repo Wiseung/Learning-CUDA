@@ -1,0 +1,5 @@
+blocksize = 64
+compute_type = "bf16"
+target_gpu = "T4"
+blocks_per_group = 256
+use_pinned_host_input = false

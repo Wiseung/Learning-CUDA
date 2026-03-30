@@ -27,7 +27,11 @@ def _collect(stem: Path) -> dict[str, float]:
     out = {
         "cudaMemcpy_api_total_ns": 0.0,
         "cudaMemcpyAsync_api_total_ns": 0.0,
+        "cudaLaunchKernel_api_total_ns": 0.0,
+        "cudaGraphLaunch_api_total_ns": 0.0,
+        "cudaStreamSynchronize_api_total_ns": 0.0,
         "cudaMalloc_api_total_ns": 0.0,
+        "cudaHostAlloc_api_total_ns": 0.0,
         "cudaMallocHost_api_total_ns": 0.0,
         "cudaFreeHost_api_total_ns": 0.0,
         "kernel_avg_ns": 0.0,
@@ -43,8 +47,16 @@ def _collect(stem: Path) -> dict[str, float]:
             out["cudaMemcpy_api_total_ns"] += total
         elif name == "cudaMemcpyAsync":
             out["cudaMemcpyAsync_api_total_ns"] += total
+        elif name == "cudaLaunchKernel":
+            out["cudaLaunchKernel_api_total_ns"] += total
+        elif name.startswith("cudaGraphLaunch"):
+            out["cudaGraphLaunch_api_total_ns"] += total
+        elif name == "cudaStreamSynchronize":
+            out["cudaStreamSynchronize_api_total_ns"] += total
         elif name == "cudaMalloc":
             out["cudaMalloc_api_total_ns"] = total
+        elif name == "cudaHostAlloc":
+            out["cudaHostAlloc_api_total_ns"] = total
         elif name == "cudaMallocHost":
             out["cudaMallocHost_api_total_ns"] = total
         elif name == "cudaFreeHost":
@@ -105,7 +117,11 @@ def main() -> int:
         "h2d_total_ns",
         "cudaMemcpy_api_total_ns",
         "cudaMemcpyAsync_api_total_ns",
+        "cudaLaunchKernel_api_total_ns",
+        "cudaGraphLaunch_api_total_ns",
+        "cudaStreamSynchronize_api_total_ns",
         "cudaMalloc_api_total_ns",
+        "cudaHostAlloc_api_total_ns",
         "cudaMallocHost_api_total_ns",
         "cudaFreeHost_api_total_ns",
     ]

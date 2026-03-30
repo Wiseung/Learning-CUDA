@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <limits>
 
+#include <cuda_runtime.h>
+
 namespace {
 
 constexpr size_t kHeaderBytes = sizeof(int64_t) + sizeof(int64_t) + sizeof(int32_t);
@@ -53,9 +55,59 @@ T* alloc_count(size_t count) {
     return static_cast<T*>(std::malloc(count * sizeof(T)));
 }
 
+template <typename T>
+T* alloc_host_count(size_t count, bool* pinned, bool allow_pinned) {
+    if (pinned == nullptr) {
+        return nullptr;
+    }
+    (void)allow_pinned;
+    *pinned = false;
+    if (count == 0) {
+        return nullptr;
+    }
+    if (count > (std::numeric_limits<size_t>::max() / sizeof(T))) {
+        return nullptr;
+    }
+    return alloc_count<T>(count);
+}
+
+bool try_register_host_buffer(void* ptr, size_t bytes, bool allow_pinned, bool* pinned, const char* label) {
+    if (pinned == nullptr) {
+        return false;
+    }
+    *pinned = false;
+    if (!allow_pinned || ptr == nullptr || bytes == 0) {
+        return true;
+    }
+
+    const cudaError_t err = cudaHostRegister(ptr, bytes, cudaHostRegisterDefault);
+    if (err == cudaSuccess) {
+        *pinned = true;
+        return true;
+    }
+
+    std::fprintf(
+        stderr,
+        "Warning: cudaHostRegister failed for %s (%s). Continuing with pageable host memory.\n",
+        label != nullptr ? label : "buffer",
+        cudaGetErrorString(err));
+    return true;
+}
+
+template <typename T>
+void free_host_count(T* ptr, bool pinned) {
+    if (ptr == nullptr) {
+        return;
+    }
+    if (pinned) {
+        cudaHostUnregister(ptr);
+    }
+    std::free(ptr);
+}
+
 }  // namespace
 
-bool load_nf4_file(const char* bin_path, NF4QuantState* state) {
+bool load_nf4_file(const char* bin_path, NF4QuantState* state, bool use_pinned_host_input) {
     if (bin_path == nullptr || state == nullptr) {
         std::fprintf(stderr, "[load_nf4_file] invalid input pointer.\n");
         return false;
@@ -139,10 +191,14 @@ bool load_nf4_file(const char* bin_path, NF4QuantState* state) {
             state->num_groups = 1;
         }
 
-        state->h_packed_weights = alloc_count<uint8_t>(state->num_packed_bytes);
-        state->h_absmax_q = alloc_count<uint8_t>(state->num_blocks);
-        state->h_absmax2 = alloc_count<__half>(state->num_groups);
-        state->h_code2 = alloc_count<__half>(kCode2Entries);
+        state->h_packed_weights = alloc_host_count<uint8_t>(
+            state->num_packed_bytes, &state->h_packed_weights_pinned, use_pinned_host_input);
+        state->h_absmax_q = alloc_host_count<uint8_t>(
+            state->num_blocks, &state->h_absmax_q_pinned, use_pinned_host_input);
+        state->h_absmax2 = alloc_host_count<__half>(
+            state->num_groups, &state->h_absmax2_pinned, use_pinned_host_input);
+        state->h_code2 = alloc_host_count<__half>(
+            kCode2Entries, &state->h_code2_pinned, use_pinned_host_input);
 
         if (state->h_packed_weights == nullptr ||
             state->h_absmax_q == nullptr ||
@@ -180,6 +236,33 @@ bool load_nf4_file(const char* bin_path, NF4QuantState* state) {
             break;
         }
 
+        if (!try_register_host_buffer(
+                state->h_packed_weights,
+                state->num_packed_bytes,
+                use_pinned_host_input,
+                &state->h_packed_weights_pinned,
+                "packed_weights") ||
+            !try_register_host_buffer(
+                state->h_absmax_q,
+                state->num_blocks * sizeof(uint8_t),
+                use_pinned_host_input,
+                &state->h_absmax_q_pinned,
+                "absmax_q") ||
+            !try_register_host_buffer(
+                state->h_absmax2,
+                state->num_groups * sizeof(__half),
+                use_pinned_host_input,
+                &state->h_absmax2_pinned,
+                "absmax2") ||
+            !try_register_host_buffer(
+                state->h_code2,
+                kCode2Entries * sizeof(__half),
+                use_pinned_host_input,
+                &state->h_code2_pinned,
+                "code2")) {
+            break;
+        }
+
         ok = true;
     } while (false);
 
@@ -196,15 +279,19 @@ void free_nf4_state(NF4QuantState* state) {
         return;
     }
 
-    std::free(state->h_packed_weights);
-    std::free(state->h_absmax_q);
-    std::free(state->h_absmax2);
-    std::free(state->h_code2);
+    free_host_count(state->h_packed_weights, state->h_packed_weights_pinned);
+    free_host_count(state->h_absmax_q, state->h_absmax_q_pinned);
+    free_host_count(state->h_absmax2, state->h_absmax2_pinned);
+    free_host_count(state->h_code2, state->h_code2_pinned);
 
     state->h_packed_weights = nullptr;
     state->h_absmax_q = nullptr;
     state->h_absmax2 = nullptr;
     state->h_code2 = nullptr;
+    state->h_packed_weights_pinned = false;
+    state->h_absmax_q_pinned = false;
+    state->h_absmax2_pinned = false;
+    state->h_code2_pinned = false;
 
     state->num_rows = 0;
     state->num_cols = 0;

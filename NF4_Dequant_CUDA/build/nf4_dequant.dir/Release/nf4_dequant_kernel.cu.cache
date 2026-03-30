@@ -4,8 +4,8 @@ AdditionalCompilerOptions=
 AdditionalDependencies=
 AdditionalDeps=
 AdditionalLibraryDirectories=
-AdditionalOptions= -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] -O3 -Xcompiler="/EHsc -Ob2"
-AdditionalOptions= -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] -O3 -Xcompiler="/EHsc -Ob2"
+AdditionalOptions= -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_89,code=[compute_89,sm_89] -O3 -Xcompiler="/EHsc -Ob2"
+AdditionalOptions= -std=c++17 --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_89,code=[compute_89,sm_89] -O3 -Xcompiler="/EHsc -Ob2"
 CodeGeneration=
 CodeGeneration=
 CompileOut=nf4_dequant.dir\Release\nf4_dequant_kernel.obj

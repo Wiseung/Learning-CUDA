@@ -27,8 +27,11 @@ struct RunParams {
     int kernel_warmup_iters = 0;
     int profile_loop_iters = 1;
     bool reuse_device_buffers = true;
+    bool use_cuda_graph = false;
+    bool use_pinned_host_input = true;
     bool use_pinned_host_output = true;
     bool pinned_host_output_active = false;
+    NF4KernelVariant kernel_variant = NF4KernelVariant::kAuto;
     float autotune_ms_256 = -1.0f;
     float autotune_ms_512 = -1.0f;
     float bnb_time_ms = -1.0f;
@@ -108,6 +111,68 @@ bool parse_bool(const std::string& s, bool* out) {
         return true;
     }
     return false;
+}
+
+int count_pinned_input_buffers(const NF4QuantState& state) {
+    int count = 0;
+    count += state.h_packed_weights_pinned ? 1 : 0;
+    count += state.h_absmax_q_pinned ? 1 : 0;
+    count += state.h_absmax2_pinned ? 1 : 0;
+    count += state.h_code2_pinned ? 1 : 0;
+    return count;
+}
+
+const char* kernel_variant_to_string(const NF4KernelVariant variant) {
+    switch (variant) {
+        case NF4KernelVariant::kGeneric:
+            return "generic";
+        case NF4KernelVariant::kSpecialized:
+            return "specialized";
+        case NF4KernelVariant::kAuto:
+        default:
+            return "auto";
+    }
+}
+
+bool parse_kernel_variant(const std::string& s, NF4KernelVariant* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    std::string t = trim(s);
+    for (char& c : t) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (t == "auto") {
+        *out = NF4KernelVariant::kAuto;
+        return true;
+    }
+    if (t == "generic") {
+        *out = NF4KernelVariant::kGeneric;
+        return true;
+    }
+    if (t == "specialized") {
+        *out = NF4KernelVariant::kSpecialized;
+        return true;
+    }
+    return false;
+}
+
+bool specialized_kernel_supported(const int blocksize) {
+    return blocksize == 64 || blocksize == 128;
+}
+
+NF4KernelVariant resolve_effective_kernel_variant(
+    const NF4KernelVariant requested,
+    const int blocksize) {
+    if (requested == NF4KernelVariant::kGeneric) {
+        return NF4KernelVariant::kGeneric;
+    }
+    if (requested == NF4KernelVariant::kSpecialized) {
+        return specialized_kernel_supported(blocksize) ? NF4KernelVariant::kSpecialized
+                                                       : NF4KernelVariant::kGeneric;
+    }
+    return specialized_kernel_supported(blocksize) ? NF4KernelVariant::kSpecialized
+                                                   : NF4KernelVariant::kGeneric;
 }
 
 bool load_params_file(const char* params_path, RunParams* params) {
@@ -212,6 +277,27 @@ bool load_params_file(const char* params_path, RunParams* params) {
                 return false;
             }
             params->reuse_device_buffers = v;
+        } else if (key == "use_cuda_graph") {
+            bool v = false;
+            if (!parse_bool(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: invalid use_cuda_graph\n", line_no);
+                return false;
+            }
+            params->use_cuda_graph = v;
+        } else if (key == "use_pinned_host_input") {
+            bool v = false;
+            if (!parse_bool(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: invalid use_pinned_host_input\n", line_no);
+                return false;
+            }
+            params->use_pinned_host_input = v;
+        } else if (key == "kernel_variant") {
+            NF4KernelVariant v = NF4KernelVariant::kAuto;
+            if (!parse_kernel_variant(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: kernel_variant must be auto/generic/specialized\n", line_no);
+                return false;
+            }
+            params->kernel_variant = v;
         } else if (key == "use_pinned_host_output") {
             bool v = false;
             if (!parse_bool(value, &v)) {
@@ -257,7 +343,10 @@ bool write_perf_log(
     const std::string& log_path,
     const NF4QuantState& state,
     const RunParams& params,
+    const NF4KernelVariant effective_kernel_variant,
     float kernel_ms,
+    float end_to_end_ms,
+    float graph_build_time_ms,
     double effective_bw_gbps,
     double speedup_vs_bnb) {
     std::ofstream fout(log_path, std::ios::out | std::ios::trunc);
@@ -270,6 +359,8 @@ bool write_perf_log(
     fout.precision(6);
 
     fout << "kernel_time_ms=" << kernel_ms << "\n";
+    fout << "end_to_end_ms=" << end_to_end_ms << "\n";
+    fout << "graph_build_time_ms=" << graph_build_time_ms << "\n";
     fout << "effective_bandwidth_gbps=" << effective_bw_gbps << "\n";
     if (std::isfinite(speedup_vs_bnb)) {
         fout << "speedup_vs_bnb=" << speedup_vs_bnb << "\n";
@@ -286,6 +377,11 @@ bool write_perf_log(
     fout << "kernel_warmup_iters=" << params.kernel_warmup_iters << "\n";
     fout << "profile_loop_iters=" << params.profile_loop_iters << "\n";
     fout << "reuse_device_buffers=" << (params.reuse_device_buffers ? "true" : "false") << "\n";
+    fout << "use_cuda_graph=" << (params.use_cuda_graph ? "true" : "false") << "\n";
+    fout << "use_pinned_host_input=" << (params.use_pinned_host_input ? "true" : "false") << "\n";
+    fout << "pinned_host_input_buffers=" << count_pinned_input_buffers(state) << "\n";
+    fout << "kernel_variant_requested=" << kernel_variant_to_string(params.kernel_variant) << "\n";
+    fout << "kernel_variant_effective=" << kernel_variant_to_string(effective_kernel_variant) << "\n";
     fout << "use_pinned_host_output=" << (params.use_pinned_host_output ? "true" : "false") << "\n";
     fout << "pinned_host_output_active=" << (params.pinned_host_output_active ? "true" : "false") << "\n";
     if (params.autotune_ms_256 > 0.0f) {
@@ -318,7 +414,7 @@ int main(int argc, char** argv) {
     }
 
     NF4QuantState state{};
-    if (!load_nf4_file(weights_path, &state)) {
+    if (!load_nf4_file(weights_path, &state, params.use_pinned_host_input)) {
         std::fprintf(stderr, "Failed to load NF4 file: %s\n", weights_path);
         return EXIT_FAILURE;
     }
@@ -331,36 +427,47 @@ int main(int argc, char** argv) {
             state.blocksize);
     }
     state.blocks_per_group = params.blocks_per_group;
+    const NF4KernelVariant effective_kernel_variant =
+        resolve_effective_kernel_variant(params.kernel_variant, state.blocksize);
+    if (params.kernel_variant == NF4KernelVariant::kSpecialized &&
+        effective_kernel_variant != NF4KernelVariant::kSpecialized) {
+        std::fprintf(
+            stderr,
+            "Warning: specialized kernel requested but unsupported for blocksize=%d. Falling back to generic.\n",
+            state.blocksize);
+    }
 
     const size_t output_bytes = state.num_elements * sizeof(uint16_t);
     std::vector<uint16_t> output_pageable;
-    uint16_t* output_ptr = nullptr;
-    if (params.use_pinned_host_output) {
-        cudaError_t err = cudaMallocHost(reinterpret_cast<void**>(&output_ptr), output_bytes);
+    output_pageable.assign(state.num_elements, 0U);
+    uint16_t* output_ptr = output_pageable.data();
+    params.pinned_host_output_active = false;
+    if (params.use_pinned_host_output && output_ptr != nullptr && output_bytes > 0) {
+        const cudaError_t err =
+            cudaHostRegister(output_ptr, output_bytes, cudaHostRegisterDefault);
         if (err == cudaSuccess) {
             params.pinned_host_output_active = true;
         } else {
             std::fprintf(
                 stderr,
-                "Warning: cudaMallocHost failed for output buffer (%s). Falling back to pageable host memory.\n",
+                "Warning: cudaHostRegister failed for output buffer (%s). Continuing with pageable host memory.\n",
                 cudaGetErrorString(err));
         }
-    }
-    if (output_ptr == nullptr) {
-        output_pageable.assign(state.num_elements, 0U);
-        output_ptr = output_pageable.data();
-        params.pinned_host_output_active = false;
     }
 
     auto free_output_buffer = [&]() {
         if (params.pinned_host_output_active && output_ptr != nullptr) {
-            cudaFreeHost(output_ptr);
-            output_ptr = nullptr;
+            cudaHostUnregister(output_ptr);
             params.pinned_host_output_active = false;
         }
     };
 
-    auto run_once = [&](void* out_ptr, int block_dim, float* out_ms, bool copy_output_to_host) -> bool {
+    auto run_once = [&](void* out_ptr,
+                        int block_dim,
+                        float* out_ms,
+                        float* out_end_to_end_ms,
+                        float* out_graph_build_time_ms,
+                        bool copy_output_to_host) -> bool {
         return cuda_dequant_nf4(
             state,
             out_ptr,
@@ -368,7 +475,11 @@ int main(int argc, char** argv) {
             out_ms,
             block_dim,
             copy_output_to_host,
-            params.reuse_device_buffers);
+            params.reuse_device_buffers,
+            params.use_cuda_graph,
+            params.kernel_variant,
+            out_end_to_end_ms,
+            out_graph_build_time_ms);
     };
 
     int selected_block_dim = params.block_dim;
@@ -379,7 +490,7 @@ int main(int argc, char** argv) {
 
         for (int cand : candidates) {
             float warmup_ms = 0.0f;
-            if (!run_once(nullptr, cand, &warmup_ms, false)) {
+            if (!run_once(nullptr, cand, &warmup_ms, nullptr, nullptr, false)) {
                 std::fprintf(stderr, "CUDA dequant warmup failed for block_dim=%d.\n", cand);
                 free_output_buffer();
                 cuda_release_nf4_device_cache();
@@ -390,7 +501,7 @@ int main(int argc, char** argv) {
             double total_ms = 0.0;
             for (int rep = 0; rep < params.autotune_repeats; ++rep) {
                 float ms = 0.0f;
-                if (!run_once(nullptr, cand, &ms, false)) {
+                if (!run_once(nullptr, cand, &ms, nullptr, nullptr, false)) {
                     std::fprintf(stderr, "CUDA dequant failed during autotune for block_dim=%d.\n", cand);
                     free_output_buffer();
                     cuda_release_nf4_device_cache();
@@ -425,7 +536,7 @@ int main(int argc, char** argv) {
 
     for (int i = 0; i < params.kernel_warmup_iters; ++i) {
         float warmup_ms = 0.0f;
-        if (!run_once(nullptr, selected_block_dim, &warmup_ms, false)) {
+        if (!run_once(nullptr, selected_block_dim, &warmup_ms, nullptr, nullptr, false)) {
             std::fprintf(stderr, "CUDA dequant failed during kernel_warmup_iters at iter=%d.\n", i);
             free_output_buffer();
             cuda_release_nf4_device_cache();
@@ -435,6 +546,8 @@ int main(int argc, char** argv) {
     }
 
     float kernel_ms = 0.0f;
+    float end_to_end_ms = 0.0f;
+    float graph_build_time_ms = 0.0f;
     bool profiler_started = false;
     const int profile_loop_iters = params.profile_loop_iters > 0 ? params.profile_loop_iters : 1;
     for (int iter = 0; iter < profile_loop_iters; ++iter) {
@@ -447,7 +560,13 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (!run_once(output_ptr, selected_block_dim, &kernel_ms, true)) {
+        if (!run_once(
+                output_ptr,
+                selected_block_dim,
+                &kernel_ms,
+                &end_to_end_ms,
+                &graph_build_time_ms,
+                true)) {
             std::fprintf(stderr, "CUDA dequant failed at profile loop iter=%d.\n", iter);
             if (profiler_started) {
                 cudaProfilerStop();
@@ -468,8 +587,14 @@ int main(int argc, char** argv) {
     save_dequant(output_ptr, state.num_rows, state.num_cols, output_path, params.use_bf16);
 
     const double bw_gbps = compute_effective_bandwidth_gbps(state, kernel_ms);
+    std::printf("Host input buffers pinned: %d/4\n", count_pinned_input_buffers(state));
     std::printf("Host output buffer: %s\n", params.pinned_host_output_active ? "pinned" : "pageable");
     std::printf("Reuse device buffers: %s\n", params.reuse_device_buffers ? "true" : "false");
+    std::printf("Use CUDA Graph: %s\n", params.use_cuda_graph ? "true" : "false");
+    std::printf(
+        "Kernel variant: requested=%s effective=%s\n",
+        kernel_variant_to_string(params.kernel_variant),
+        kernel_variant_to_string(effective_kernel_variant));
     if (profile_loop_iters > 1) {
         std::printf("Profile loop iters: %d (capture last %d)\n", profile_loop_iters, profile_loop_iters - 1);
     } else {
@@ -477,6 +602,8 @@ int main(int argc, char** argv) {
     }
     std::printf("BlockDim: %d\n", selected_block_dim);
     std::printf("Kernel time: %.4f ms\n", kernel_ms);
+    std::printf("End-to-end time: %.4f ms\n", end_to_end_ms);
+    std::printf("Graph build time: %.4f ms\n", graph_build_time_ms);
     std::printf("Effective bandwidth: %.2f GB/s\n", bw_gbps);
     double speedup = std::numeric_limits<double>::quiet_NaN();
     if (params.bnb_time_ms > 0.0f) {
@@ -488,7 +615,16 @@ int main(int argc, char** argv) {
 
     const std::string log_path =
         params.perf_log_path.empty() ? default_perf_log_path(output_path) : params.perf_log_path;
-    if (write_perf_log(log_path, state, params, kernel_ms, bw_gbps, speedup)) {
+    if (write_perf_log(
+            log_path,
+            state,
+            params,
+            effective_kernel_variant,
+            kernel_ms,
+            end_to_end_ms,
+            graph_build_time_ms,
+            bw_gbps,
+            speedup)) {
         std::printf("Perf log: %s\n", log_path.c_str());
     }
 

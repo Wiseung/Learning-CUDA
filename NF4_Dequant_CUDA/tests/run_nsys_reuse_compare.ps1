@@ -6,11 +6,39 @@ param(
     [string]$NsysPath = "C:\Program Files\NVIDIA Corporation\Nsight Systems 2024.4.2\target-windows-x64\nsys.exe",
     [int]$Rounds = 5,
     [int]$ProfileLoopIters = 6,
-    [bool]$UseCudaProfilerRange = $true,
+    $UseCudaProfilerRange = $true,
     [string]$RunTag = "steady"
 )
 
 $ErrorActionPreference = "Stop"
+
+function Convert-ToBoolValue {
+    param(
+        $Value,
+        [string]$Name
+    )
+
+    if ($Value -is [bool]) {
+        return $Value
+    }
+    if ($Value -is [int] -or $Value -is [long]) {
+        if ($Value -eq 0) { return $false }
+        if ($Value -eq 1) { return $true }
+    }
+
+    $text = "$Value".Trim().ToLowerInvariant()
+    switch ($text) {
+        "true" { return $true }
+        "false" { return $false }
+        "1" { return $true }
+        "0" { return $false }
+        '$true' { return $true }
+        '$false' { return $false }
+    }
+    throw ("Invalid boolean value for {0}: {1}" -f $Name, $Value)
+}
+
+$UseCudaProfilerRange = Convert-ToBoolValue -Value $UseCudaProfilerRange -Name "UseCudaProfilerRange"
 
 function Write-ParamsWithReuseFlag {
     param(
@@ -105,8 +133,8 @@ for ($r = 1; $r -le $Rounds; ++$r) {
         -ReportStem $reportOff `
         -ExePath $ExePath `
         -NsysPath $NsysPath `
-        -WarmupFirst:$false `
-        -UseCudaProfilerRange:$UseCudaProfilerRange
+        -WarmupFirst 0 `
+        -UseCudaProfilerRange $UseCudaProfilerRange
     if ($LASTEXITCODE -ne 0) {
         throw "nsys profile failed for reuse=false, round=$r"
     }
@@ -122,8 +150,8 @@ for ($r = 1; $r -le $Rounds; ++$r) {
         -ReportStem $reportOn `
         -ExePath $ExePath `
         -NsysPath $NsysPath `
-        -WarmupFirst:$false `
-        -UseCudaProfilerRange:$UseCudaProfilerRange
+        -WarmupFirst 0 `
+        -UseCudaProfilerRange $UseCudaProfilerRange
     if ($LASTEXITCODE -ne 0) {
         throw "nsys profile failed for reuse=true, round=$r"
     }

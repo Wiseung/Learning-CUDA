@@ -1,6 +1,6 @@
-kernel_time_ms=0.303616
-effective_bandwidth_gbps=139.016869
-speedup_vs_bnb=12.158853
+kernel_time_ms=0.284544
+effective_bandwidth_gbps=148.334688
+speedup_vs_bnb=12.973818
 target_gpu=T4
 compute_type=bf16
 blocksize=64

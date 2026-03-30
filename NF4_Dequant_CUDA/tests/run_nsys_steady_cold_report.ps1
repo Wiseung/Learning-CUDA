@@ -19,7 +19,7 @@ Write-Host "[1/2] Running steady-state median report..."
     -NsysPath $NsysPath `
     -Rounds $Rounds `
     -ProfileLoopIters $SteadyProfileLoopIters `
-    -UseCudaProfilerRange:$true `
+    -UseCudaProfilerRange 1 `
     -RunTag "steady"
 if ($LASTEXITCODE -ne 0) {
     throw "steady-state report failed"
@@ -34,7 +34,7 @@ Write-Host "[2/2] Running cold-start median report..."
     -NsysPath $NsysPath `
     -Rounds $Rounds `
     -ProfileLoopIters 1 `
-    -UseCudaProfilerRange:$false `
+    -UseCudaProfilerRange 0 `
     -RunTag "cold"
 if ($LASTEXITCODE -ne 0) {
     throw "cold-start report failed"

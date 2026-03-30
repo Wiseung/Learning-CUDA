@@ -1,0 +1,3 @@
+rounds,5
+metric,generic_median_ms,specialized_median_ms,delta_pct,speedup_generic_over_specialized
+kernel_time_ms,0.389728,0.313984,-19.44,1.2412
