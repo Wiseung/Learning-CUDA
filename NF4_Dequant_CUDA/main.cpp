@@ -30,6 +30,10 @@ struct RunParams {
     bool use_cuda_graph = false;
     bool use_pinned_host_input = true;
     bool use_pinned_host_output = true;
+    bool copy_output_to_host = true;
+    bool save_output = true;
+    bool benchmark_only = false;
+    bool prime_cuda_runtime = false;
     bool pinned_host_output_active = false;
     NF4KernelVariant kernel_variant = NF4KernelVariant::kAuto;
     float autotune_ms_256 = -1.0f;
@@ -291,6 +295,34 @@ bool load_params_file(const char* params_path, RunParams* params) {
                 return false;
             }
             params->use_pinned_host_input = v;
+        } else if (key == "copy_output_to_host") {
+            bool v = false;
+            if (!parse_bool(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: invalid copy_output_to_host\n", line_no);
+                return false;
+            }
+            params->copy_output_to_host = v;
+        } else if (key == "save_output") {
+            bool v = false;
+            if (!parse_bool(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: invalid save_output\n", line_no);
+                return false;
+            }
+            params->save_output = v;
+        } else if (key == "benchmark_only") {
+            bool v = false;
+            if (!parse_bool(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: invalid benchmark_only\n", line_no);
+                return false;
+            }
+            params->benchmark_only = v;
+        } else if (key == "prime_cuda_runtime") {
+            bool v = false;
+            if (!parse_bool(value, &v)) {
+                std::fprintf(stderr, "params parse error at line %d: invalid prime_cuda_runtime\n", line_no);
+                return false;
+            }
+            params->prime_cuda_runtime = v;
         } else if (key == "kernel_variant") {
             NF4KernelVariant v = NF4KernelVariant::kAuto;
             if (!parse_kernel_variant(value, &v)) {
@@ -384,6 +416,10 @@ bool write_perf_log(
     fout << "kernel_variant_effective=" << kernel_variant_to_string(effective_kernel_variant) << "\n";
     fout << "use_pinned_host_output=" << (params.use_pinned_host_output ? "true" : "false") << "\n";
     fout << "pinned_host_output_active=" << (params.pinned_host_output_active ? "true" : "false") << "\n";
+    fout << "copy_output_to_host=" << (params.copy_output_to_host ? "true" : "false") << "\n";
+    fout << "save_output=" << (params.save_output ? "true" : "false") << "\n";
+    fout << "benchmark_only=" << (params.benchmark_only ? "true" : "false") << "\n";
+    fout << "prime_cuda_runtime=" << (params.prime_cuda_runtime ? "true" : "false") << "\n";
     if (params.autotune_ms_256 > 0.0f) {
         fout << "autotune_ms_256=" << params.autotune_ms_256 << "\n";
     }
@@ -412,11 +448,29 @@ int main(int argc, char** argv) {
     if (!load_params_file(params_path, &params)) {
         return EXIT_FAILURE;
     }
+    if (params.benchmark_only) {
+        params.copy_output_to_host = false;
+        params.save_output = false;
+    }
+    if (!params.copy_output_to_host && params.save_output) {
+        std::fprintf(
+            stderr,
+            "Warning: save_output=true requires copy_output_to_host=true. Disabling save_output.\n");
+        params.save_output = false;
+    }
 
     NF4QuantState state{};
     if (!load_nf4_file(weights_path, &state, params.use_pinned_host_input)) {
         std::fprintf(stderr, "Failed to load NF4 file: %s\n", weights_path);
         return EXIT_FAILURE;
+    }
+    if (params.prime_cuda_runtime) {
+        const cudaError_t prime_err = cudaFree(nullptr);
+        if (prime_err != cudaSuccess) {
+            std::fprintf(stderr, "Failed to prime CUDA runtime: %s\n", cudaGetErrorString(prime_err));
+            free_nf4_state(&state);
+            return EXIT_FAILURE;
+        }
     }
 
     if (params.has_blocksize && params.blocksize != state.blocksize) {
@@ -439,19 +493,22 @@ int main(int argc, char** argv) {
 
     const size_t output_bytes = state.num_elements * sizeof(uint16_t);
     std::vector<uint16_t> output_pageable;
-    output_pageable.assign(state.num_elements, 0U);
-    uint16_t* output_ptr = output_pageable.data();
+    uint16_t* output_ptr = nullptr;
     params.pinned_host_output_active = false;
-    if (params.use_pinned_host_output && output_ptr != nullptr && output_bytes > 0) {
-        const cudaError_t err =
-            cudaHostRegister(output_ptr, output_bytes, cudaHostRegisterDefault);
-        if (err == cudaSuccess) {
-            params.pinned_host_output_active = true;
-        } else {
-            std::fprintf(
-                stderr,
-                "Warning: cudaHostRegister failed for output buffer (%s). Continuing with pageable host memory.\n",
-                cudaGetErrorString(err));
+    if (params.copy_output_to_host) {
+        output_pageable.assign(state.num_elements, 0U);
+        output_ptr = output_pageable.data();
+        if (params.use_pinned_host_output && output_ptr != nullptr && output_bytes > 0) {
+            const cudaError_t err =
+                cudaHostRegister(output_ptr, output_bytes, cudaHostRegisterDefault);
+            if (err == cudaSuccess) {
+                params.pinned_host_output_active = true;
+            } else {
+                std::fprintf(
+                    stderr,
+                    "Warning: cudaHostRegister failed for output buffer (%s). Continuing with pageable host memory.\n",
+                    cudaGetErrorString(err));
+            }
         }
     }
 
@@ -566,7 +623,7 @@ int main(int argc, char** argv) {
                 &kernel_ms,
                 &end_to_end_ms,
                 &graph_build_time_ms,
-                true)) {
+                params.copy_output_to_host)) {
             std::fprintf(stderr, "CUDA dequant failed at profile loop iter=%d.\n", iter);
             if (profiler_started) {
                 cudaProfilerStop();
@@ -584,13 +641,23 @@ int main(int argc, char** argv) {
         }
     }
 
-    save_dequant(output_ptr, state.num_rows, state.num_cols, output_path, params.use_bf16);
+    if (params.save_output) {
+        save_dequant(output_ptr, state.num_rows, state.num_cols, output_path, params.use_bf16);
+    }
 
     const double bw_gbps = compute_effective_bandwidth_gbps(state, kernel_ms);
     std::printf("Host input buffers pinned: %d/4\n", count_pinned_input_buffers(state));
-    std::printf("Host output buffer: %s\n", params.pinned_host_output_active ? "pinned" : "pageable");
+    if (!params.copy_output_to_host) {
+        std::printf("Host output buffer: disabled\n");
+    } else {
+        std::printf("Host output buffer: %s\n", params.pinned_host_output_active ? "pinned" : "pageable");
+    }
     std::printf("Reuse device buffers: %s\n", params.reuse_device_buffers ? "true" : "false");
     std::printf("Use CUDA Graph: %s\n", params.use_cuda_graph ? "true" : "false");
+    std::printf("Copy output to host: %s\n", params.copy_output_to_host ? "true" : "false");
+    std::printf("Save output file: %s\n", params.save_output ? "true" : "false");
+    std::printf("Benchmark only: %s\n", params.benchmark_only ? "true" : "false");
+    std::printf("Prime CUDA runtime: %s\n", params.prime_cuda_runtime ? "true" : "false");
     std::printf(
         "Kernel variant: requested=%s effective=%s\n",
         kernel_variant_to_string(params.kernel_variant),
@@ -611,6 +678,9 @@ int main(int argc, char** argv) {
         std::printf("Speedup vs bnb: %.2fx\n", speedup);
     } else {
         std::printf("Speedup vs bnb: N/A (set bnb_time_ms in params.txt)\n");
+    }
+    if (!params.save_output) {
+        std::printf("Output file skipped: %s\n", output_path);
     }
 
     const std::string log_path =

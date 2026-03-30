@@ -1,0 +1,16 @@
+rounds,5
+metric,base_median,new_median,delta_pct
+kernel_avg_ns,226811.000,217436.000,-4.13
+d2h_total_ns,2590889.000,2568138.000,-0.88
+h2d_total_ns,811151.000,705457.000,-13.03
+cudaMemcpy_api_total_ns,3245354.000,110836.000,-96.58
+cudaMemcpyAsync_api_total_ns,3245354.000,110836.000,-96.58
+cudaLaunchKernel_api_total_ns,707964.000,3204598.000,352.65
+cudaGraphLaunch_api_total_ns,0.000,0.000,0.00
+cudaStreamSynchronize_api_total_ns,2596518.000,2580248.000,-0.63
+cudaMalloc_api_total_ns,206816.000,249341.000,20.56
+cudaHostAlloc_api_total_ns,0.000,0.000,0.00
+cudaHostRegister_api_total_ns,83019216.000,75647322.000,-8.88
+cudaHostUnregister_api_total_ns,978135.000,2753466.000,181.50
+cudaMallocHost_api_total_ns,0.000,0.000,0.00
+cudaFreeHost_api_total_ns,0.000,0.000,0.00

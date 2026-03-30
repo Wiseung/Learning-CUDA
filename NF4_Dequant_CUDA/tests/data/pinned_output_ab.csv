@@ -1,0 +1,6 @@
+rounds,5
+metric,pageable_median_ms,pinned_median_ms,delta_pct,speedup_pageable_over_pinned
+wall_process_ms,186.988900,171.999200,-8.02,1.0871
+kernel_time_ms,0.670720,0.632832,-5.65,1.0599
+end_to_end_ms,93.042702,6.877100,-92.61,13.5294
+graph_build_time_ms,0.000000,0.000000,0.00,NaN

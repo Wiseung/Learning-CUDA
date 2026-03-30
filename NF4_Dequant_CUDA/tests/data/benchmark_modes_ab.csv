@@ -1,0 +1,6 @@
+rounds,5
+metric,full_median_ms,no_save_median_ms,benchmark_only_prime_median_ms,no_save_vs_full_pct,benchmark_only_prime_vs_full_pct
+wall_process_ms,177.859900,160.856300,135.234300,-9.56,-23.97
+kernel_time_ms,0.852992,0.749568,0.809984,-12.12,-5.04
+end_to_end_ms,7.135800,6.679400,3.242000,-6.40,-54.57
+graph_build_time_ms,0.000000,0.000000,0.000000,0.00,0.00

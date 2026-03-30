@@ -32,6 +32,8 @@ def _collect(stem: Path) -> dict[str, float]:
         "cudaStreamSynchronize_api_total_ns": 0.0,
         "cudaMalloc_api_total_ns": 0.0,
         "cudaHostAlloc_api_total_ns": 0.0,
+        "cudaHostRegister_api_total_ns": 0.0,
+        "cudaHostUnregister_api_total_ns": 0.0,
         "cudaMallocHost_api_total_ns": 0.0,
         "cudaFreeHost_api_total_ns": 0.0,
         "kernel_avg_ns": 0.0,
@@ -57,6 +59,10 @@ def _collect(stem: Path) -> dict[str, float]:
             out["cudaMalloc_api_total_ns"] = total
         elif name == "cudaHostAlloc":
             out["cudaHostAlloc_api_total_ns"] = total
+        elif name == "cudaHostRegister":
+            out["cudaHostRegister_api_total_ns"] += total
+        elif name == "cudaHostUnregister":
+            out["cudaHostUnregister_api_total_ns"] += total
         elif name == "cudaMallocHost":
             out["cudaMallocHost_api_total_ns"] = total
         elif name == "cudaFreeHost":
@@ -122,6 +128,8 @@ def main() -> int:
         "cudaStreamSynchronize_api_total_ns",
         "cudaMalloc_api_total_ns",
         "cudaHostAlloc_api_total_ns",
+        "cudaHostRegister_api_total_ns",
+        "cudaHostUnregister_api_total_ns",
         "cudaMallocHost_api_total_ns",
         "cudaFreeHost_api_total_ns",
     ]

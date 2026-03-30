@@ -32,6 +32,9 @@ Program output prints:
 - End-to-end time (ms)
 - Graph build time (ms, current call only; zero when graph is already cached)
 - Host input pinned count (`0..4`)
+- Whether host output copy is enabled
+- Whether output file save is enabled
+- Whether benchmark-only mode is enabled
 - Effective bandwidth (GB/s)
 - Speedup vs bitsandbytes (if `bnb_time_ms` is set in params)
 - Selected block dimension (`block_dim`)
@@ -56,7 +59,11 @@ Supported keys in `params.txt`:
 - `autotune_repeats` (default `5`)
 - `kernel_warmup_iters` (default `0`, extra in-process warmup runs without D2H copy)
 - `profile_loop_iters` (default `1`; when `>1`, run N loops in one process and start profiler capture from loop 2, i.e. capture last `N-1`)
-- `use_pinned_host_input` (`true/false`, default `true`)
+- `use_pinned_host_input` (`true/false`, default `false`)
+- `copy_output_to_host` (`true/false`, default `true`)
+- `save_output` (`true/false`, default `true`)
+- `benchmark_only` (`true/false`, default `false`; forces `copy_output_to_host=false` and `save_output=false`)
+- `prime_cuda_runtime` (`true/false`, default `false`; runs a lightweight CUDA call before timed work so benchmark-only mode does not include first-use runtime/context initialization)
 - `reuse_device_buffers` (`true/false`, default `true`)
 - `use_cuda_graph` (`true/false`, default `false`; only effective with `reuse_device_buffers=true`)
 - `kernel_variant` (`auto`, `generic`, or `specialized`; default `auto`)
@@ -64,6 +71,7 @@ Supported keys in `params.txt`:
 - `perf_log_path` (optional custom log path)
 
 Note: when `autotune_block_dim=true`, candidate runs measure kernel time only (skip D2H copy) and the final selected run still performs full D2H output copy.
+If `save_output=false`, the executable still requires the `<output.bin>` CLI argument and uses it to derive the perf-log path by default, but it skips writing the binary file itself.
 
 `kernel_variant=specialized` currently has dedicated fast paths for `blocksize=64` and `blocksize=128`. When `blocks_per_group=256`, the specialized path also uses a fixed hot path for `group_id` computation. For other block sizes, the executable falls back to `generic` and records both requested/effective variants in the perf log.
 
@@ -80,7 +88,11 @@ autotune_block_dim = true
 autotune_repeats = 5
 kernel_warmup_iters = 0
 profile_loop_iters = 1
-use_pinned_host_input = true
+use_pinned_host_input = false
+copy_output_to_host = true
+save_output = true
+benchmark_only = false
+prime_cuda_runtime = false
 reuse_device_buffers = true
 use_cuda_graph = false
 kernel_variant = "auto"
@@ -158,6 +170,44 @@ powershell -ExecutionPolicy Bypass -File tests/run_pinned_input_ab.ps1 -WeightsB
 ```
 
 This writes `tests/data/pinned_input_ab.csv` with median `kernel_time_ms`, `end_to_end_ms`, and `graph_build_time_ms`.
+
+One-shot cold-start A/B compare for `use_pinned_host_output=false` vs `true`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_pinned_output_ab.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5
+```
+
+This writes `tests/data/pinned_output_ab.csv` with median `wall_process_ms`, `kernel_time_ms`, `end_to_end_ms`, and `graph_build_time_ms`.
+
+One-shot compare across `full`, `no-save`, and `benchmark-only+prime` modes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_benchmark_modes_ab.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5
+```
+
+This writes `tests/data/benchmark_modes_ab.csv`.
+
+Nsight Systems cold-start median compare for `use_pinned_host_input=false` vs `true`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_nsys_pinned_input_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5 -ProfileLoopIters 1 -UseCudaProfilerRange 0 -RunTag input_pin
+```
+
+Nsight Systems cold-start median compare for `use_pinned_host_output=false` vs `true`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests/run_nsys_pinned_output_compare.ps1 -WeightsBin tests/data/nf4_r4096_c4096_bs64_bpg256_weights.bin -ParamsTemplate params.txt -OutputDir tests/data -Rounds 5 -ProfileLoopIters 1 -UseCudaProfilerRange 0 -RunTag output_pin
+```
+
+Recommended defaults after the host-registration change:
+
+- cold-start / CLI: `use_pinned_host_input = false`, `use_pinned_host_output = true`
+- steady-state repeated calls: `use_pinned_host_input = false`, `use_pinned_host_output = true`, `reuse_device_buffers = true`, `use_cuda_graph = true`
+
+Recommended config for pure benchmark runs (exclude host output copy and file write, while avoiding first-use CUDA init noise):
+
+- `benchmark_only = true`
+- `prime_cuda_runtime = true`
 
 Nsight Systems median compare for `kernel_variant=generic` vs `specialized`:
 
